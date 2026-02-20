@@ -115,20 +115,22 @@ async def cmd_start(message: types.Message):
     save_user(message.chat.id)
     status = get_user_status(message.chat.id)
     if message.chat.id != YOUR_ID:
-        await bot.send_message(YOUR_ID, f"👤 Новий клієнт!\nID: `{message.chat.id}`\nІм'я: {message.from_user.full_name}\nUsername: @{message.from_user.username}")
-    
+        try:
+            await bot.send_message(YOUR_ID, f"👤 Новий клієнт!\nID: {message.chat.id}\nІм'я: {message.from_user.full_name}")
+        except:
+            pass
     status_text = "✅ Активна" if status == 1 else "⏳ Очікує активації"
     text = (
-        f"🏎 **Вітаємо в Auto Monitor UA!**\n\n"
-        f"Ваш ID: `{message.chat.id}`\n"
+        f"Вітаємо в Auto Monitor UA!\n\n"
+        f"Ваш ID: {message.chat.id}\n"
         f"Статус підписки: {status_text}\n\n"
-        f"💳 **Для підключення (150 грн/міс):**\n"
+        f"💳 Для підключення (150 грн/міс):\n"
         f"1. Поповніть банку: {PAYMENT_LINK}\n"
         f"2. У коментарі вкажіть ваш ID.\n"
         f"3. Доступ відкриється після перевірки.\n\n"
         f"🆘 Підтримка: @Faree_1"
     )
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(text)
 
 @dp.message(Command("set"))
 async def cmd_set(message: types.Message):
