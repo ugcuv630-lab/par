@@ -17,17 +17,28 @@ dp = Dispatcher()
 def init_db():
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users 
-                      (chat_id INTEGER PRIMARY KEY, keyword TEXT, status INTEGER DEFAULT 0)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS sent_ads 
-                      (ad_id TEXT PRIMARY KEY)''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            chat_id INTEGER PRIMARY KEY,
+            keyword TEXT,
+            min_price INTEGER,
+            max_price INTEGER,
+            city TEXT,
+            status INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('CREATE TABLE IF NOT EXISTS sent_ads (ad_id TEXT PRIMARY KEY)')
     conn.commit()
     conn.close()
 
 def save_user(chat_id):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT OR IGNORE INTO users (chat_id, keyword, status) VALUES (?, ?, ?)', (chat_id, "", 0))
+    cursor.execute('''
+        INSERT OR IGNORE INTO users 
+        (chat_id, keyword, min_price, max_price, city, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (chat_id, "", None, None, "", 0))
     conn.commit()
     conn.close()
 
@@ -35,6 +46,26 @@ def update_filter(chat_id, keyword):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('UPDATE users SET keyword = ? WHERE chat_id = ?', (keyword.lower(), chat_id))
+    conn.commit()
+    conn.close()
+
+def update_price(chat_id, min_p, max_p):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'UPDATE users SET min_price = ?, max_price = ? WHERE chat_id = ?',
+        (min_p, max_p, chat_id)
+    )
+    conn.commit()
+    conn.close()
+
+def update_city(chat_id, city):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'UPDATE users SET city = ? WHERE chat_id = ?',
+        (city.lower(), chat_id)
+    )
     conn.commit()
     conn.close()
 
@@ -68,14 +99,16 @@ def is_ad_new(ad_id):
 def get_active_users():
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT chat_id, keyword FROM users WHERE status = 1')
+    cursor.execute(
+        'SELECT chat_id, keyword, min_price, max_price, city FROM users WHERE status = 1'
+    )
     users = cursor.fetchall()
     conn.close()
     return users
 
 async def parse_auto_ria():
     url = "https://auto.ria.com/uk/search/?indexName=auto,order_auto,newauto_search&categories.main.id=0&price.currency=1&sort[0].order=dates.created.desc"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
@@ -95,19 +128,27 @@ async def parse_auto_ria():
     return []
 
 async def monitoring_loop():
-    print("🚀 Monitoring started")
     while True:
         new_ads = await parse_auto_ria()
         if new_ads:
             active_users = get_active_users()
             for ad in new_ads:
-                for chat_id, keyword in active_users:
-                    if not keyword or keyword in ad['title'].lower():
-                        text = f"🔥 НОВЕ ОГОЛОШЕННЯ! 🔥\n\n🚗 {ad['title']}\n💰 Ціна: {ad['price']}\n🔗 {ad['link']}"
-                        try:
-                            await bot.send_message(chat_id, text)
-                        except:
-                            pass
+                title = ad['title'].lower()
+                price = int(''.join(filter(str.isdigit, ad['price'])))
+                text = f"🔥 НОВЕ ОГОЛОШЕННЯ!\n\n🚗 {ad['title']}\n💰 {ad['price']}\n🔗 {ad['link']}"
+                for chat_id, keyword, min_p, max_p, city in active_users:
+                    if keyword and keyword not in title:
+                        continue
+                    if min_p and price < min_p:
+                        continue
+                    if max_p and price > max_p:
+                        continue
+                    if city and city not in title:
+                        continue
+                    try:
+                        await bot.send_message(chat_id, text)
+                    except:
+                        pass
         await asyncio.sleep(60)
 
 @dp.message(Command("start"))
@@ -116,30 +157,44 @@ async def cmd_start(message: types.Message):
     status = get_user_status(message.chat.id)
     if message.chat.id != YOUR_ID:
         try:
-            await bot.send_message(YOUR_ID, f"👤 Новий клієнт!\nID: {message.chat.id}\nІм'я: {message.from_user.full_name}")
+            await bot.send_message(YOUR_ID, f"Новий користувач: {message.chat.id}")
         except:
             pass
-    status_text = "✅ Активна" if status == 1 else "⏳ Очікує активації"
-    text = (
-        f"Вітаємо в Auto Monitor UA!\n\n"
-        f"Ваш ID: {message.chat.id}\n"
-        f"Статус підписки: {status_text}\n\n"
-        f"💳 Для підключення (150 грн/міс):\n"
-        f"1. Поповніть банку: {PAYMENT_LINK}\n"
-        f"2. У коментарі вкажіть ваш ID.\n"
-        f"3. Доступ відкриється після перевірки.\n\n"
-        f"🆘 Підтримка: @Faree_1"
+    status_text = "Активна" if status == 1 else "Очікує активації"
+    await message.answer(
+        f"Auto Monitor UA\n\nID: {message.chat.id}\nСтатус: {status_text}\n\n"
+        f"Оплата 150 грн/міс:\n{PAYMENT_LINK}\nКоментар: ваш ID"
     )
-    await message.answer(text)
 
 @dp.message(Command("set"))
 async def cmd_set(message: types.Message):
     if get_user_status(message.chat.id) == 0:
-        await message.answer("❌ Встановлення фільтрів доступне лише після оплати.")
+        await message.answer("Недоступно")
         return
     keyword = message.text.replace("/set", "").strip().lower()
     update_filter(message.chat.id, keyword)
-    await message.answer(f"🔎 Фільтр оновлено: **{keyword if keyword else 'Всі авто'}**", parse_mode="Markdown")
+    await message.answer(f"Фільтр: {keyword if keyword else 'всі'}")
+
+@dp.message(Command("price"))
+async def cmd_price(message: types.Message):
+    if get_user_status(message.chat.id) == 0:
+        await message.answer("Недоступно")
+        return
+    try:
+        _, min_p, max_p = message.text.split()
+        update_price(message.chat.id, int(min_p), int(max_p))
+        await message.answer(f"Ціна: {min_p}-{max_p}")
+    except:
+        await message.answer("Формат: /price 5000 9000")
+
+@dp.message(Command("city"))
+async def cmd_city(message: types.Message):
+    if get_user_status(message.chat.id) == 0:
+        await message.answer("Недоступно")
+        return
+    city = message.text.replace("/city", "").strip()
+    update_city(message.chat.id, city)
+    await message.answer(f"Місто: {city if city else 'будь-яке'}")
 
 @dp.message(Command("activate"))
 async def cmd_activate(message: types.Message):
@@ -147,24 +202,15 @@ async def cmd_activate(message: types.Message):
         try:
             target_id = int(message.text.replace("/activate", "").strip())
             activate_user_db(target_id)
-            await message.answer(f"✅ Доступ для {target_id} активовано!")
-            await bot.send_message(target_id, "🌟 **Ваш доступ активовано.**\nФільтр: `/set марка` (наприклад `/set toyota`) або залиште порожнім.")
+            await message.answer("Активовано")
+            await bot.send_message(target_id, "Доступ активовано")
         except:
-            await message.answer("Помилка. Вводь: /activate ID")
-
-@dp.message(Command("check"))
-async def cmd_check(message: types.Message):
-    await message.answer("📡 Auto Monitor UA онлайн!")
+            await message.answer("Помилка")
 
 async def main():
-    print("📡 Bot starting...")
     init_db()
     asyncio.create_task(monitoring_loop())
-    print("🤖 Polling started")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except:
-        print("停止")
+    asyncio.run(main())
